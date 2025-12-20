@@ -1,6 +1,5 @@
-// binance-ws-server.ts
 import { WebSocketServer, WebSocket } from 'ws';
-import { BinanceFuturesClient } from './BinanceClient'; // твой класс
+import { BinanceFuturesClient } from './BinanceClient';
 
 const wss = new WebSocketServer({ port: Number(process.env.PORT) || 3001 });
 

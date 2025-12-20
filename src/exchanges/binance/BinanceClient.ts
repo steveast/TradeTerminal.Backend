@@ -381,6 +381,7 @@ export class BinanceFuturesClient {
           2
         )} USD) @ ~${price.toFixed(2)} | positionSide: ${positionSide}`
       );
+      console.log(this.wsApi)
 
       const orderResponse = await this.wsApi.newOrder({
         symbol,
