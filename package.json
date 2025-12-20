@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "ts-node-dev --respawn ./src/index.ts",
     "build": "tsc",
+    "lint": "eslint ./src/ --cache --fix",
     "start": "node dist/exchanges/binance/index.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -21,14 +22,18 @@
   "homepage": "https://github.com/steveast/TradeTerminal.Backend#readme",
   "dependencies": {
     "@binance/derivatives-trading-usds-futures": "^21.0.0",
-    "eslint": "^9.39.2",
     "lodash": "^4.17.21",
     "rxjs": "^7.8.2",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.50.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "ts-node-dev": "^2.0.0"
+    "@eslint/js": "^9.39.2",
+    "dotenv": "^17.2.3",
+    "eslint": "^9.39.2",
+    "globals": "^16.5.0",
+    "jiti": "^2.6.1",
+    "ts-node-dev": "^2.0.0",
+    "typescript-eslint": "^8.50.0"
   }
 }

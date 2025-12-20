@@ -53,10 +53,11 @@ export class BinanceFuturesClient {
   private listenKey?: string;
 
   constructor(
-    private apiKey: string,
-    private apiSecret: string,
-    private testnet = process.env.TESTNET
+    private apiKey: string = process.env.BINANCE_API_KEY!,
+    private apiSecret: string = process.env.BINANCE_API_SECRET!,
+    private testnet = process.env.TESTNET!
   ) {
+    console.log(testnet);
     const rest = testnet
       ? DERIVATIVES_TRADING_USDS_FUTURES_REST_API_TESTNET_URL
       : DERIVATIVES_TRADING_USDS_FUTURES_REST_API_PROD_URL;
@@ -446,13 +447,11 @@ export class BinanceFuturesClient {
     orderId,
     newPrice,
     qty: qtyInUsd,
-    side,
   }: {
     symbol: string;
     orderId?: number | string;
     newPrice: number;
     qty: number;
-    side: 'BUY' | 'SELL';
   }) {
     const info = await this.getSymbolInfo(symbol);
 
@@ -563,7 +562,7 @@ export class BinanceFuturesClient {
 
       const cancelResp = await this.client.restAPI.cancelAlgoOrder({ algoid: algoId });
       const cancelData = await cancelResp.data();
-      console.log(`[ALGO CANCEL] AlgoId ${algoId} отменён`);
+      console.log(`[ALGO CANCEL] AlgoId ${algoId} отменён`, cancelData);
 
       const newResp = await this.client.restAPI.newAlgoOrder({
         symbol,
