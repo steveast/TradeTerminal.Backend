@@ -1,0 +1,865 @@
+import {
+  DERIVATIVES_TRADING_USDS_FUTURES_REST_API_PROD_URL,
+  DERIVATIVES_TRADING_USDS_FUTURES_REST_API_TESTNET_URL,
+  DERIVATIVES_TRADING_USDS_FUTURES_WS_API_PROD_URL,
+  DERIVATIVES_TRADING_USDS_FUTURES_WS_API_TESTNET_URL,
+  DERIVATIVES_TRADING_USDS_FUTURES_WS_STREAMS_PROD_URL,
+  DERIVATIVES_TRADING_USDS_FUTURES_WS_STREAMS_TESTNET_URL,
+  DerivativesTradingUsdsFutures,
+} from '@binance/derivatives-trading-usds-futures';
+
+import { BehaviorSubject, Subject, timer, from } from 'rxjs';
+import { mergeMap, retry, catchError, takeUntil } from 'rxjs/operators';
+
+export type Candle = {
+  openTime: number;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+  closeTime: number;
+  quoteVolume: string;
+};
+
+export type Position = {
+  symbol: string;
+  positionAmt: string;
+  entryPrice: string;
+  markPrice: string;
+  unrealizedPnL: string;
+  leverage: string;
+  positionSide: 'BOTH' | 'LONG' | 'SHORT';
+};
+
+export class BinanceFuturesClient {
+  private readonly _candle$ = new BehaviorSubject<Candle | null>(null);
+  private readonly _positions$ = new BehaviorSubject<Position[]>([]);
+  private readonly _status$ = new BehaviorSubject<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  private readonly _destroy$ = new Subject<void>();
+
+  public readonly candles$ = this._candle$.asObservable();
+  public readonly positions$ = this._positions$.asObservable();
+  public readonly status$ = this._status$.asObservable();
+
+  public get statusValue(): 'disconnected' | 'connecting' | 'connected' {
+    return this._status$.value;
+  }
+
+  private client: DerivativesTradingUsdsFutures;
+  private clientProd: DerivativesTradingUsdsFutures;
+  private wsStreams: any;
+  private wsApi: any;
+  private listenKey?: string;
+
+  constructor(
+    private apiKey: string,
+    private apiSecret: string,
+    private testnet = process.env.TESTNET
+  ) {
+    const rest = testnet
+      ? DERIVATIVES_TRADING_USDS_FUTURES_REST_API_TESTNET_URL
+      : DERIVATIVES_TRADING_USDS_FUTURES_REST_API_PROD_URL;
+
+    const streams = testnet
+      ? DERIVATIVES_TRADING_USDS_FUTURES_WS_STREAMS_TESTNET_URL
+      : DERIVATIVES_TRADING_USDS_FUTURES_WS_STREAMS_PROD_URL;
+
+    const apiWs = testnet
+      ? DERIVATIVES_TRADING_USDS_FUTURES_WS_API_TESTNET_URL
+      : DERIVATIVES_TRADING_USDS_FUTURES_WS_API_PROD_URL;
+
+    this.client = new DerivativesTradingUsdsFutures({
+      configurationRestAPI: { apiKey, apiSecret, basePath: rest },
+      configurationWebsocketStreams: { wsURL: streams },
+      configurationWebsocketAPI: { apiKey, apiSecret, wsURL: apiWs },
+    });
+
+    this.clientProd = new DerivativesTradingUsdsFutures({
+      configurationRestAPI: { apiKey, apiSecret },
+      configurationWebsocketStreams: { wsURL: streams },
+      configurationWebsocketAPI: { apiKey, apiSecret, wsURL: apiWs },
+    });
+  }
+
+  async connect(symbol = 'BTCUSDT', interval = '1m') {
+    if (this._status$.value === 'connecting' || this._status$.value === 'connected') {
+      return;
+    }
+
+    this._status$.next('connecting');
+
+    const attempt = () => from(this.createConnection(symbol, interval)).pipe(
+      catchError(err => {
+        console.error('Ошибка при подключении:', err);
+        throw err;
+      })
+    );
+
+    attempt()
+      .pipe(
+        retry({
+          delay: (error, retryCount) => {
+            const delay = Math.min(1000 * retryCount, 30000);
+            console.warn(`Переподключение #${retryCount} через ${delay}мс...`);
+            return timer(delay);
+          }
+        }),
+        takeUntil(this._destroy$)
+      )
+      .subscribe({
+        next: () => {
+          this._status$.next('connected');
+          console.log('Binance Futures — CONNECTED');
+        },
+        error: () => {
+          this._status$.next('disconnected');
+        }
+      });
+  }
+
+  private async createConnection(symbol: string, interval: string) {
+    let listenKey: string;
+
+    try {
+      const lkResponse: any = await this.client.restAPI.startUserDataStream();
+      const data = await lkResponse.data();
+      listenKey = data.listenKey;
+      this.listenKey = listenKey;
+      console.log('listenKey', listenKey);
+    } catch (e) {
+      console.error("Ошибка при получении listenKey. Проверьте ключи/права/IP:", e);
+      throw new Error("LISTEN_KEY_FETCH_FAILED");
+    }
+
+    this.wsStreams = await this.client.websocketStreams.connect({
+      stream: [`${symbol.toLowerCase()}@kline_${interval}`, `${listenKey}@userData`],
+    });
+
+    try {
+      this.wsStreams.on('message', (data: string) => {
+        try {
+          const msg = JSON.parse(data);
+          if (msg.stream === `${symbol.toLowerCase()}@kline_${interval}` && msg.data.k?.x) {
+            this._candle$.next({
+              openTime: msg.data.k.t,
+              open: msg.data.k.o,
+              high: msg.data.k.h,
+              low: msg.data.k.l,
+              close: msg.data.k.c,
+              volume: msg.data.k.v,
+              closeTime: msg.data.k.T,
+              quoteVolume: msg.data.k.q,
+            });
+          } else if (msg.stream === `${listenKey}@userData` && (msg.data.e === 'ACCOUNT_UPDATE' || msg.data.e === 'ORDER_TRADE_UPDATE')) {
+            this.updatePositions();
+          }
+        } catch (e) {
+          console.warn('Message parse error', e);
+        }
+      });
+    } catch (e) {
+      console.error("КРИТИЧЕСКАЯ ОШИБКА: Сбой при подписке на WS потоки:", e);
+      throw new Error("WS_SUBSCRIPTION_FAILED");
+    }
+
+    this.wsApi = await this.client.websocketAPI.connect();
+
+    timer(0, 25 * 60 * 1000)
+      .pipe(
+        mergeMap(() => this.client.restAPI.keepaliveUserDataStream()),
+        takeUntil(this._destroy$)
+      )
+      .subscribe();
+
+    await this.updatePositions();
+  }
+
+  // Добавь в класс BinanceFuturesClient
+  public async changeSymbol(newSymbol: string, newInterval: string = '1m') {
+    if (!this.wsStreams) {
+      // Если ещё не подключены — просто подключаемся к новому
+      await this.connect(newSymbol, newInterval);
+      return;
+    }
+
+    const currentStreamName = `${newSymbol.toLowerCase()}@kline_${newInterval}`;
+    const userDataStream = `${this.listenKey}@userData`;
+
+    console.log(`[CHANGE SYMBOL] Переподключение к ${newSymbol} ${newInterval}`);
+
+    try {
+      // Отписываемся от старых стримов
+      this.wsStreams.unsubscribe();
+
+      // Подписываемся на новые
+      this.wsStreams = await this.client.websocketStreams.connect({
+        stream: [currentStreamName, userDataStream],
+      });
+
+      // Перепривязываем обработчик сообщений (важно!)
+      this.wsStreams.on('message', (data: string) => {
+        try {
+          const msg = JSON.parse(data);
+          if (msg.stream === currentStreamName && msg.data.k?.x) {
+            this._candle$.next({
+              openTime: msg.data.k.t,
+              open: msg.data.k.o,
+              high: msg.data.k.h,
+              low: msg.data.k.l,
+              close: msg.data.k.c,
+              volume: msg.data.k.v,
+              closeTime: msg.data.k.T,
+              quoteVolume: msg.data.k.q,
+            });
+          } else if (msg.stream === userDataStream && (msg.data.e === 'ACCOUNT_UPDATE' || msg.data.e === 'ORDER_TRADE_UPDATE')) {
+            this.updatePositions();
+          }
+        } catch (e) {
+          console.warn('Message parse error', e);
+        }
+      });
+
+      console.log(`[CHANGE SYMBOL] Успешно переподключились к ${newSymbol}@kline_${newInterval}`);
+    } catch (error) {
+      console.error('[CHANGE SYMBOL] Ошибка при смене тикера:', error);
+      // При ошибке — пробуем полностью переподключиться
+      this.destroy();
+      this._status$.next('disconnected');
+      await this.connect(newSymbol, newInterval);
+    }
+  }
+
+  async enableHedgeMode() {
+    try {
+      await this.client.restAPI.changePositionMode({ dualSidePosition: 'true' });
+      console.log('[CONFIG] Hedge Mode (двусторонний режим) успешно включён');
+    } catch (error: any) {
+      if (error?.code === -4059) {
+        console.log('[CONFIG] Hedge Mode уже включён (нормально)');
+      } else {
+        console.error('[CONFIG] Ошибка при включении Hedge Mode:', error?.code, error?.msg || error);
+        throw error;
+      }
+    }
+  }
+
+  async disableHedgeMode() {
+    try {
+      await this.client.restAPI.changePositionMode({ dualSidePosition: 'false' });
+      console.log('[CONFIG] One-Way Mode (односторонний режим) успешно включён');
+    } catch (error: any) {
+      if (error?.code === -4059) {
+        console.log('[CONFIG] One-Way Mode уже активен (нормально)');
+      } else {
+        console.error('[CONFIG] Ошибка при выключении Hedge Mode:', error?.code, error?.msg || error);
+        if (this.testnet) {
+          console.log('[INFO] На тестовой сети нельзя выключить Hedge Mode — это нормально');
+        } else {
+          throw error;
+        }
+      }
+    }
+  }
+
+  async setLeverage(symbol: string, leverage: number) {
+    if (leverage < 1 || leverage > 125) {
+      throw new Error(`Недопустимое плечо ${leverage}. Допустимо: 1–125`);
+    }
+
+    try {
+      await this.client.restAPI.changeInitialLeverage({ symbol, leverage });
+      console.log(`[LEVERAGE] Установлено плечо ${leverage}x для ${symbol}`);
+    } catch (error: any) {
+      if (error?.code === -4141) {
+        console.warn(`[LEVERAGE] Плечо ${leverage}x недоступно для ${symbol} (возможно, превышен tier)`);
+      } else if (error?.code === -4059) {
+        console.log(`[LEVERAGE] Плечо ${leverage}x уже установлено для ${symbol}`);
+      } else {
+        console.error(`[LEVERAGE] Ошибка при установке плеча ${leverage}x для ${symbol}:`, error?.code, error?.msg || error);
+        throw error;
+      }
+    }
+  }
+
+  private async getCurrentPrice(symbol: string): Promise<number> {
+    const response = await this.client.restAPI.ticker24hrPriceChangeStatistics({ symbol });
+    const data: any = await response.data();
+
+    const price = parseFloat(data.lastPrice);
+    if (isNaN(price) || price <= 0) {
+      throw new Error(`Некорректная цена для ${symbol}: ${data.lastPrice}`);
+    }
+    return price;
+  }
+
+  private symbolInfoCache = new Map<string, {
+    minQty: number;
+    stepSize: number;
+    precision: number;
+    tickSize: number;
+  }>();
+
+  private async getSymbolInfo(symbol: string) {
+    if (this.symbolInfoCache.has(symbol)) {
+      return this.symbolInfoCache.get(symbol)!;
+    }
+
+    try {
+      const response = await this.clientProd.restAPI.exchangeInformation();
+      const data: any = await response.data();
+
+      const symbolInfo = data.symbols.find((s: any) => s.symbol === symbol);
+      if (!symbolInfo) {
+        throw new Error(`Символ ${symbol} не найден на Binance Futures`);
+      }
+
+      const lotFilter = symbolInfo.filters.find((f: any) => f.filterType === 'LOT_SIZE');
+      const priceFilter = symbolInfo.filters.find((f: any) => f.filterType === 'PRICE_FILTER');
+
+      if (!lotFilter || !priceFilter) {
+        throw new Error(`Не найдены фильтры LOT_SIZE или PRICE_FILTER для ${symbol}`);
+      }
+
+      const stepSizeStr = lotFilter.stepSize;
+      const precision = stepSizeStr.includes('.')
+        ? stepSizeStr.split('.')[1].replace(/0+$/, '').length || 0
+        : 0;
+
+      const info = {
+        minQty: Number(lotFilter.minQty),
+        stepSize: Number(lotFilter.stepSize),
+        precision,
+        tickSize: Number(priceFilter.tickSize),
+      };
+
+      this.symbolInfoCache.set(symbol, info);
+
+      console.log(`[SYMBOL INFO] ${symbol} → minQty: ${info.minQty}, stepSize: ${info.stepSize}, precision: ${info.precision}, tickSize: ${info.tickSize}`);
+
+      return info;
+
+    } catch (error: any) {
+      console.error(`[getSymbolInfo] Ошибка при получении информации о символе ${symbol}:`, error?.message || error);
+      throw new Error(`Не удалось получить торговые правила для ${symbol}: ${error?.message || error}`);
+    }
+  }
+
+  async marketOrder({
+    symbol,
+    side,
+    usdAmount,
+    positionSide = 'BOTH',
+  }: {
+    symbol: string;
+    side: 'BUY' | 'SELL';
+    usdAmount: number;
+    positionSide?: 'BOTH' | 'LONG' | 'SHORT';
+  }) {
+    try {
+      const price = await this.getCurrentPrice(symbol);
+
+      const info = await this.getSymbolInfo(symbol);
+      if (!info) {
+        throw new Error(`Не удалось получить информацию о символе ${symbol}`);
+      }
+
+      let qty = usdAmount / price;
+
+      qty = Math.floor(qty / info.stepSize) * info.stepSize;
+
+      if (qty < info.minQty) {
+        throw new Error(
+          `Ордер слишком мал: ${qty} < ${info.minQty} (минимальный объём для ${symbol})`
+        );
+      }
+
+      const quantity = qty.toFixed(info.precision);
+
+      console.log(
+        `[MARKET ORDER] ${side} ${quantity} ${symbol} (~${usdAmount.toFixed(
+          2
+        )} USD) @ ~${price.toFixed(2)} | positionSide: ${positionSide}`
+      );
+
+      const orderResponse = await this.wsApi.newOrder({
+        symbol,
+        side,
+        type: 'MARKET',
+        quantity,
+        positionSide,
+      });
+
+      return orderResponse;
+    } catch (error: any) {
+      console.error(
+        `Ошибка MARKET ORDER (${symbol} ${side} ${usdAmount} USD, side: ${positionSide}):`,
+        error?.message || error
+      );
+
+      if (error?.code === -4061) {
+        console.error(
+          `Ошибка -4061: Вы используете positionSide='${positionSide}', но аккаунт в Hedge Mode.\n` +
+          `Решение: используйте 'LONG' или 'SHORT' вместо 'BOTH'.\n` +
+          `На тестнете Hedge Mode включён по умолчанию и его нельзя выключить.`
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  async limitOrder({
+    symbol,
+    side,
+    usdAmount,
+    price,
+    positionSide = this.testnet ? 'LONG' : 'BOTH',
+  }: {
+    symbol: string;
+    side: 'BUY' | 'SELL';
+    usdAmount: number;
+    price: number;
+    positionSide?: 'LONG' | 'SHORT' | 'BOTH';
+  }) {
+    const info = await this.getSymbolInfo(symbol);
+    let qty = usdAmount / price;
+    qty = Math.floor(qty / info.stepSize) * info.stepSize;
+    if (qty < info.minQty) { throw new Error('Ордер слишком мал'); }
+
+    const quantity = qty.toFixed(info.precision);
+
+    return this.wsApi.newOrder({
+      symbol,
+      side,
+      type: 'LIMIT',
+      timeInForce: 'GTC',
+      quantity,
+      price: price.toFixed(info.precision === 0 ? 1 : info.precision),
+      positionSide,
+    });
+  }
+
+  async modifyLimitOrder({
+    symbol,
+    orderId,
+    newPrice,
+    qty: qtyInUsd,
+    side,
+  }: {
+    symbol: string;
+    orderId?: number | string;
+    newPrice: number;
+    qty: number;
+    side: 'BUY' | 'SELL';
+  }) {
+    const info = await this.getSymbolInfo(symbol);
+
+    let qty = qtyInUsd / newPrice;
+    qty = Math.floor(qty / info.stepSize) * info.stepSize;
+    if (qty < info.minQty) {
+      throw new Error(`Новый объём слишком мал: ${qty} < ${info.minQty} (${symbol})`);
+    }
+
+    const quantityStr = qty.toFixed(info.precision);
+    const quantityNum = Number(quantityStr);
+
+    const roundedNewPrice = Number(newPrice.toFixed(info.precision || 1));
+
+    const payload: any = {
+      symbol,
+      type: 'LIMIT' as any,
+      price: roundedNewPrice,
+      quantity: quantityNum,
+    };
+
+    if (orderId) {
+      let binanceOrderId: number | undefined;
+      let originalOrderSide: 'BUY' | 'SELL' | undefined;
+
+      try {
+        const statusCheck = await this.client.restAPI.queryOrder({
+          symbol,
+          orderId: typeof orderId === 'number' ? orderId : undefined,
+          origClientOrderId: typeof orderId === 'string' ? orderId : undefined,
+        });
+        const orderData = await statusCheck.data();
+
+        binanceOrderId = Number(orderData.orderId);
+        originalOrderSide = orderData.side as 'BUY' | 'SELL';
+
+        if (orderData.status !== 'NEW' && orderData.status !== 'PARTIALLY_FILLED') {
+          const message = `[MODIFY ABORTED] Ордер ${orderId} имеет статус ${orderData.status}. Модификация невозможна.`;
+          console.warn(message);
+          return orderData;
+        }
+        console.log(`[MODIFY CHECK] Ордер ${orderId} (Binance ID: ${binanceOrderId}) в статусе ${orderData.status}. Продолжаем модификацию...`);
+
+        if (originalOrderSide) {
+          payload.side = originalOrderSide;
+        } else {
+          throw new Error(`Не удалось получить оригинальное направление (side) ордера.`);
+        }
+
+      } catch (error: any) {
+        console.error(`[MODIFY ERROR] Ошибка при проверке статуса ордера ${orderId}. Модификация невозможна.`);
+        throw error;
+      }
+
+      if (typeof orderId === 'number') {
+        payload.orderId = orderId;
+      } else {
+        payload.origClientOrderId = orderId;
+        payload.newClientOrderId = `mod_${Date.now()}`;
+      }
+    }
+
+    const resp = await this.client.restAPI.modifyOrder(payload);
+    const data = await resp.data();
+
+    return data;
+  }
+
+  private async modifyTakeProfitOrStopLoss({
+    symbol,
+    algoId,
+    newTriggerPrice,
+    newQuantityUsd,
+    positionSide,
+    isTakeProfit = true,
+  }: {
+    symbol: string;
+    algoId: number;
+    newTriggerPrice: number;
+    newQuantityUsd?: number;
+    positionSide: 'LONG' | 'SHORT';
+    isTakeProfit?: boolean;
+  }) {
+    try {
+      if (!algoId) { throw new Error('algoId обязателен'); }
+
+      await this.updatePositions();
+      const position = this._positions$.value.find(
+        p => p.symbol === symbol && p.positionSide === positionSide
+      );
+
+      let quantityNum: number;
+      if (newQuantityUsd !== undefined) {
+        const price = await this.getCurrentPrice(symbol);
+        const info = await this.getSymbolInfo(symbol);
+        let qty = newQuantityUsd / price;
+        qty = Math.floor(qty / info.stepSize) * info.stepSize;
+        if (qty < info.minQty) { throw new Error('Новый объём слишком мал'); }
+        quantityNum = Number(qty.toFixed(info.precision));
+      } else if (position) {
+        quantityNum = Math.abs(Number(position.positionAmt));
+      } else {
+        throw new Error(`Позиция ${symbol} ${positionSide} не найдена. Укажите newQuantityUsd явно (размер в USD).`);
+      }
+
+      const closeSide = positionSide === 'LONG' ? 'SELL' : 'BUY';
+      const algoType = isTakeProfit ? 'TAKE_PROFIT_MARKET' : 'STOP_MARKET';
+
+      const cancelResp = await this.client.restAPI.cancelAlgoOrder({ algoid: algoId });
+      const cancelData = await cancelResp.data();
+      console.log(`[ALGO CANCEL] AlgoId ${algoId} отменён`);
+
+      const newResp = await this.client.restAPI.newAlgoOrder({
+        symbol,
+        side: closeSide as any,
+        algoType: 'CONDITIONAL',
+        type: algoType,
+        quantity: quantityNum,
+        triggerPrice: newTriggerPrice,
+        workingType: 'MARK_PRICE',
+        positionSide: positionSide as any,
+        newClientOrderId: `mod_${algoType.toLowerCase()}_${Date.now()}`,
+      } as any);
+
+      const newData = await newResp.data();
+      console.log(`[ALGO MODIFY] Новый ${algoType} создан: algoId=${newData.algoId}, price=${newTriggerPrice}, qty=${quantityNum}`);
+      return newData;
+    } catch (error: any) {
+      console.error(`Не удалось изменить algo-ордер ${algoId}:`, error?.code, error?.msg || error.message || error);
+      throw error;
+    }
+  }
+
+  async modifyTP(params: {
+    symbol: string; algoId: number; newTriggerPrice: number; newQuantityUsd?: number; positionSide: 'LONG' | 'SHORT'
+  }) {
+    return this.modifyTakeProfitOrStopLoss({ ...params, isTakeProfit: true });
+  }
+
+  async modifySL(params: {
+    symbol: string; algoId: number; newTriggerPrice: number; newQuantityUsd?: number; positionSide: 'LONG' | 'SHORT';
+  }) {
+    return this.modifyTakeProfitOrStopLoss({ ...params, isTakeProfit: false });
+  }
+
+  async strategy({
+    symbol,
+    side,
+    usdAmount,
+    entryPrice,
+    stopLoss,
+    takeProfit,
+    positionSide = side === 'BUY' ? 'LONG' : 'SHORT',
+  }: {
+    symbol: string;
+    side: 'BUY' | 'SELL';
+    usdAmount: number;
+    entryPrice: number;
+    stopLoss: number;
+    takeProfit: number;
+    positionSide: 'LONG' | 'SHORT';
+  }) {
+    const info = await this.getSymbolInfo(symbol);
+
+    let qty = usdAmount / entryPrice;
+    qty = Math.floor(qty / info.stepSize) * info.stepSize;
+    if (qty < info.minQty) { throw new Error(`Ордер слишком мал: ${qty} < ${info.minQty}`); }
+
+    const quantityStr = qty.toFixed(info.precision);
+    const quantityNum = Number(quantityStr);
+
+    const baseClientOrderId = `s_${Date.now()}`;
+
+    const roundedEntryPrice = Number(entryPrice.toFixed(info.precision || 1));
+
+    const entryResp = await this.client.restAPI.newOrder({
+      symbol,
+      side: side as any,
+      type: 'LIMIT' as any,
+      timeInForce: 'GTC' as any,
+      quantity: quantityNum,
+      price: roundedEntryPrice,
+      positionSide: positionSide as any,
+      newClientOrderId: baseClientOrderId,
+    });
+
+    const entryData = await entryResp.data();
+
+    const slSide = side === 'BUY' ? 'SELL' : 'BUY';
+
+    const slResp = await this.client.restAPI.newAlgoOrder({
+      symbol,
+      side: slSide as any,
+      algoType: 'CONDITIONAL' as any,
+      type: 'STOP_MARKET' as any,
+      quantity: quantityNum,
+      triggerPrice: stopLoss,
+      workingType: 'MARK_PRICE' as any,
+      positionSide: positionSide as any,
+    });
+
+    const tpResp = await this.client.restAPI.newAlgoOrder({
+      symbol,
+      side: slSide as any,
+      algoType: 'CONDITIONAL' as any,
+      type: 'TAKE_PROFIT_MARKET' as any,
+      quantity: quantityNum,
+      triggerPrice: takeProfit,
+      workingType: 'MARK_PRICE' as any,
+      positionSide: positionSide as any,
+    });
+
+    const slData = await slResp.data();
+    const tpData = await tpResp.data();
+
+    return {
+      entryOrderId: entryData.clientOrderId as string,
+      slAlgoId: slData.algoId as number,
+      tpAlgoId: tpData.algoId as number,
+      quantity: quantityStr,
+      entryPrice,
+      stopLoss,
+      takeProfit,
+      positionSide,
+    };
+  }
+
+  async getKlines(symbol: string, interval: string, limit = 500): Promise<Candle[]> {
+    const response: any = await this.client.restAPI.klineCandlestickData({
+      symbol,
+      interval: interval as any,
+      limit
+    });
+    const data: any[] = await response.data();
+    console.log(data);
+    return data.map((k: any[]) => ({
+      openTime: k[0],
+      open: k[1],
+      high: k[2],
+      low: k[3],
+      close: k[4],
+      volume: k[5],
+      closeTime: k[6],
+      quoteVolume: k[7],
+    }));
+  }
+
+  private async updatePositions() {
+    try {
+      const accResponse = await this.client.restAPI.accountInformationV2();
+
+      const acc = await accResponse.data();
+
+      if (!Array.isArray(acc.positions)) {
+        console.warn('[updatePositions] Неожиданная структура: acc.positions не массив', acc);
+        this._positions$.next([]);
+        return;
+      }
+
+      const activePositions: Position[] = acc.positions
+        .filter((p: any) => {
+          const amt = Number(p.positionAmt);
+          return amt !== 0 && !isNaN(amt);
+        })
+        .map((p: any): Position => ({
+          symbol: p.symbol,
+          positionAmt: p.positionAmt,
+          entryPrice: p.entryPrice,
+          markPrice: p.markPrice,
+          unrealizedPnL: p.unrealizedProfit,
+          leverage: p.leverage,
+          positionSide: p.positionSide as Position['positionSide'],
+        }));
+
+      this._positions$.next(activePositions);
+
+      if (activePositions.length > 0) {
+        console.log(
+          `[POSITIONS] Обновлено ${activePositions.length} активных позиций: ${activePositions.map(p => `${p.symbol} ${p.positionAmt} (${p.positionSide})`).join(', ')}`
+        );
+      } else {
+        console.log('[POSITIONS] Нет открытых позиций');
+      }
+
+    } catch (error: any) {
+      console.warn(
+        '[updatePositions] Не удалось обновить позиции:',
+        error?.code ? `${error.code}: ${error.msg}` : error?.message || error
+      );
+
+      if (error?.code === -2015 || error?.code === -1022) {
+        console.error('Критическая ошибка авторизации. Проверьте API ключ и права.');
+      }
+
+      this._positions$.next([]);
+    }
+  }
+
+  async forceClosePosition(symbol: string, positionSide: 'LONG' | 'SHORT') {
+    try {
+      await this.updatePositions();
+
+      const positions = this._positions$.value;
+      const pos = positions.find(
+        p => p.symbol === symbol && p.positionSide === positionSide
+      );
+
+      if (!pos || Number(pos.positionAmt) === 0) {
+        console.log(`[FORCE CLOSE] Позиция ${symbol} ${positionSide} уже закрыта или отсутствует`);
+        return;
+      }
+
+      const closeSide = Number(pos.positionAmt) > 0 ? 'SELL' : 'BUY';
+
+      const rawQty = Math.abs(Number(pos.positionAmt));
+
+      const quantity = rawQty.toFixed(8);
+
+      console.log(
+        `[FORCE CLOSE] ${closeSide} ${quantity} ${symbol} (${positionSide}) ` +
+        `| Entry: ${parseFloat(pos.entryPrice).toFixed(2)} ` +
+        `| PNL: ${parseFloat(pos.unrealizedPnL).toFixed(2)} USDT`
+      );
+
+      const orderResponse = await this.wsApi.newOrder({
+        symbol,
+        side: closeSide,
+        type: 'MARKET' as const,
+        quantity,
+        positionSide,
+      });
+
+      console.log(`[FORCE CLOSE SUCCESS] Ордер на закрытие отправлен. OrderId: ${orderResponse.data.orderId}`);
+      return orderResponse;
+    } catch (error: any) {
+      console.error(
+        `[FORCE CLOSE ERROR] Не удалось закрыть позицию ${symbol} ${positionSide}:`,
+        error?.code ? `${error.code}: ${error.msg}` : error
+      );
+
+      if (error?.code === -4061) {
+        console.error(`Ошибка: positionSide не соответствует режиму. Используй 'LONG'/'SHORT', а не 'BOTH'`);
+      }
+      if (error?.code === -4136) {
+        console.error(`Ошибка -4136: не используй closePosition: true с MARKET ордерами!`);
+      }
+      if (error?.code === -1100) {
+        console.error(`Параметр quantity некорректен — возможно, слишком много знаков после запятой`);
+      }
+
+      throw error;
+    }
+  }
+
+  async cancelOrder({
+    symbol,
+    orderId,
+    clientOrderId,
+  }: {
+    symbol: string;
+    orderId?: number | string;
+    clientOrderId?: string;
+  }) {
+    if (!orderId && !clientOrderId) {
+      throw new Error('Нужно указать orderId или clientOrderId');
+    }
+
+    try {
+      const payload: any = { symbol };
+      if (orderId) { payload.orderId = orderId; }
+      if (clientOrderId) { payload.origClientOrderId = clientOrderId; }
+
+      const resp = await this.client.restAPI.cancelOrder(payload);
+      const data = await resp.data();
+
+      console.log(`[CANCEL ORDER] Успешно отменён ордер ${orderId || clientOrderId} на ${symbol}`);
+      return data;
+    } catch (error: any) {
+      console.error(`[CANCEL ORDER ERROR] ${symbol} ${orderId || clientOrderId}:`, error?.code, error?.msg || error);
+      throw error;
+    }
+  }
+
+  async cancelAlgoOrder(algoId: number) {
+    if (!algoId) { throw new Error('algoId обязателен'); }
+
+    try {
+      const resp = await this.client.restAPI.cancelAlgoOrder({ algoid: algoId });
+      const data = await resp.data();
+
+      console.log(`[CANCEL ALGO] Успешно отменён algo-ордер ${algoId}`);
+      return data;
+    } catch (error: any) {
+      if (error?.code === -4024) {
+        console.log(`[CANCEL ALGO] AlgoId ${algoId} уже не существует (возможно, исполнен)`);
+      } else {
+        console.error(`[CANCEL ALGO ERROR] ${algoId}:`, error?.code, error?.msg || error);
+      }
+
+      throw error;
+    }
+  }
+
+  destroy() {
+    this._destroy$.next();
+    this._destroy$.complete();
+    this.wsStreams?.unsubscribe();
+    this.wsApi?.unsubscribe();
+    this._status$.next('disconnected');
+  }
+}

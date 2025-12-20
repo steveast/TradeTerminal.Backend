@@ -1,0 +1,28 @@
+{
+  "name": "tradeterminal.backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/steveast/TradeTerminal.Backend.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/steveast/TradeTerminal.Backend/issues"
+  },
+  "homepage": "https://github.com/steveast/TradeTerminal.Backend#readme",
+  "dependencies": {
+    "@binance/derivatives-trading-usds-futures": "^21.0.0",
+    "eslint": "^9.39.2",
+    "lodash": "^4.17.21",
+    "rxjs": "^7.8.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.50.0",
+    "ws": "^8.18.3"
+  }
+}
