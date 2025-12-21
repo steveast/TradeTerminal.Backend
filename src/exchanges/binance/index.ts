@@ -43,6 +43,16 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'orderResult', data: result }));
       }
 
+      if (msg.type === 'strategy') {
+        const result = await binanceClient.strategy(msg.payload);
+        ws.send(JSON.stringify({ type: 'strategy', data: result }));
+      }
+
+      if (msg.type === 'symbolInfo') {
+        const result = await binanceClient.getSymbolInfo(msg.payload);
+        ws.send(JSON.stringify({ type: 'symbolInfo', data: result }));
+      }
+
       if (msg.type === 'forceClose') {
         const result = await binanceClient.forceClosePosition(msg.symbol, msg.positionSide);
         ws.send(JSON.stringify({ type: 'closeResult', data: result }));

@@ -57,7 +57,6 @@ export class BinanceFuturesClient {
     private apiSecret: string = process.env.BINANCE_API_SECRET!,
     private testnet = process.env.TESTNET!
   ) {
-    console.log(testnet);
     const rest = testnet
       ? DERIVATIVES_TRADING_USDS_FUTURES_REST_API_TESTNET_URL
       : DERIVATIVES_TRADING_USDS_FUTURES_REST_API_PROD_URL;
@@ -301,7 +300,7 @@ export class BinanceFuturesClient {
     tickSize: number;
   }>();
 
-  private async getSymbolInfo(symbol: string) {
+  async getSymbolInfo({ symbol }: { symbol: string }) {
     if (this.symbolInfoCache.has(symbol)) {
       return this.symbolInfoCache.get(symbol)!;
     }
@@ -360,7 +359,7 @@ export class BinanceFuturesClient {
     try {
       const price = await this.getCurrentPrice(symbol);
 
-      const info = await this.getSymbolInfo(symbol);
+      const info = await this.getSymbolInfo({ symbol });
       if (!info) {
         throw new Error(`Не удалось получить информацию о символе ${symbol}`);
       }
@@ -424,7 +423,7 @@ export class BinanceFuturesClient {
     price: number;
     positionSide?: 'LONG' | 'SHORT' | 'BOTH';
   }) {
-    const info = await this.getSymbolInfo(symbol);
+    const info = await this.getSymbolInfo({ symbol });
     let qty = usdAmount / price;
     qty = Math.floor(qty / info.stepSize) * info.stepSize;
     if (qty < info.minQty) { throw new Error('Ордер слишком мал'); }
@@ -453,7 +452,7 @@ export class BinanceFuturesClient {
     newPrice: number;
     qty: number;
   }) {
-    const info = await this.getSymbolInfo(symbol);
+    const info = await this.getSymbolInfo({ symbol });
 
     let qty = qtyInUsd / newPrice;
     qty = Math.floor(qty / info.stepSize) * info.stepSize;
@@ -546,7 +545,7 @@ export class BinanceFuturesClient {
       let quantityNum: number;
       if (newQuantityUsd !== undefined) {
         const price = await this.getCurrentPrice(symbol);
-        const info = await this.getSymbolInfo(symbol);
+        const info = await this.getSymbolInfo({ symbol });
         let qty = newQuantityUsd / price;
         qty = Math.floor(qty / info.stepSize) * info.stepSize;
         if (qty < info.minQty) { throw new Error('Новый объём слишком мал'); }
@@ -614,7 +613,7 @@ export class BinanceFuturesClient {
     takeProfit: number;
     positionSide: 'LONG' | 'SHORT';
   }) {
-    const info = await this.getSymbolInfo(symbol);
+    const info = await this.getSymbolInfo({ symbol });
 
     let qty = usdAmount / entryPrice;
     qty = Math.floor(qty / info.stepSize) * info.stepSize;
