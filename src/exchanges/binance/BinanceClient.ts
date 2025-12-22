@@ -664,12 +664,13 @@ export class BinanceFuturesClient {
       const ordersForPosition = allAlgoOrders.filter((order: any) =>
         order.positionSide === positionSide
       );
+      const stopLoss: IAlgoOrder = ordersForPosition.find((o: any) => o.orderType === 'STOP_MARKET');
+      const takeProfit = ordersForPosition.find((o: any) => o.orderType === 'TAKE_PROFIT_MARKET');
 
       return {
-        stopLoss: ordersForPosition.find((o: any) => o.orderType === 'STOP_MARKET') || null,
-        takeProfit: ordersForPosition.find((o: any) => o.orderType === 'TAKE_PROFIT_MARKET') || null
-      } as { stopLoss: IAlgoOrder; takeProfit: IAlgoOrder; };
-
+        stopLoss: stopLoss ? parseNumericStrings(stopLoss) : null,
+        takeProfit: takeProfit ? parseNumericStrings(takeProfit) : null,
+      };
     } catch (error: any) {
       console.error(`[GET ALGO ORDERS ERROR] ${symbol}:`, error?.message || error);
       return { stopLoss: null, takeProfit: null };
