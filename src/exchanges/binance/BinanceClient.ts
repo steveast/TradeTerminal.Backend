@@ -10,31 +10,25 @@ import {
 
 import { BehaviorSubject, Subject, timer, from } from 'rxjs';
 import { mergeMap, retry, catchError, takeUntil } from 'rxjs/operators';
+import { ICandle, IPosition } from './types';
 
-export type Candle = {
-  openTime: number;
-  open: string;
-  high: string;
-  low: string;
-  close: string;
-  volume: string;
-  closeTime: number;
-  quoteVolume: string;
-};
+function parseNumericStrings<T extends Record<string, any>>(obj: T): T {
+  return Object.fromEntries(
+    Object.entries(obj).map(([key, value]) => {
+      if (typeof value === 'string') {
+        const num = Number(value);
+        return [key, Number.isNaN(num) ? value : num];
+      }
+      return [key, value];
+    }),
+  ) as T;
+}
 
-export type Position = {
-  symbol: string;
-  positionAmt: string;
-  entryPrice: string;
-  markPrice: string;
-  unrealizedPnL: string;
-  leverage: string;
-  positionSide: 'BOTH' | 'LONG' | 'SHORT';
-};
+
 
 export class BinanceFuturesClient {
-  private readonly _candle$ = new BehaviorSubject<Candle | null>(null);
-  private readonly _positions$ = new BehaviorSubject<Position[]>([]);
+  private readonly _candle$ = new BehaviorSubject<ICandle | null>(null);
+  private readonly _positions$ = new BehaviorSubject<IPosition[]>([]);
   private readonly _status$ = new BehaviorSubject<'disconnected' | 'connecting' | 'connected'>('disconnected');
   private readonly _destroy$ = new Subject<void>();
 
@@ -51,6 +45,13 @@ export class BinanceFuturesClient {
   private wsStreams: any;
   private wsApi: any;
   private listenKey?: string;
+
+  private symbolInfoCache = new Map<string, {
+    minQty: number;
+    stepSize: number;
+    precision: number;
+    tickSize: number;
+  }>();
 
   constructor(
     private apiKey: string = process.env.BINANCE_API_KEY!,
@@ -175,7 +176,6 @@ export class BinanceFuturesClient {
     await this.updatePositions();
   }
 
-  // Добавь в класс BinanceFuturesClient
   public async changeSymbol(newSymbol: string, newInterval: string = '1m') {
     if (!this.wsStreams) {
       // Если ещё не подключены — просто подключаемся к новому
@@ -244,24 +244,6 @@ export class BinanceFuturesClient {
     }
   }
 
-  async disableHedgeMode() {
-    try {
-      await this.client.restAPI.changePositionMode({ dualSidePosition: 'false' });
-      console.log('[CONFIG] One-Way Mode (односторонний режим) успешно включён');
-    } catch (error: any) {
-      if (error?.code === -4059) {
-        console.log('[CONFIG] One-Way Mode уже активен (нормально)');
-      } else {
-        console.error('[CONFIG] Ошибка при выключении Hedge Mode:', error?.code, error?.msg || error);
-        if (this.testnet) {
-          console.log('[INFO] На тестовой сети нельзя выключить Hedge Mode — это нормально');
-        } else {
-          throw error;
-        }
-      }
-    }
-  }
-
   async setLeverage(symbol: string, leverage: number) {
     if (leverage < 1 || leverage > 125) {
       throw new Error(`Недопустимое плечо ${leverage}. Допустимо: 1–125`);
@@ -292,13 +274,6 @@ export class BinanceFuturesClient {
     }
     return price;
   }
-
-  private symbolInfoCache = new Map<string, {
-    minQty: number;
-    stepSize: number;
-    precision: number;
-    tickSize: number;
-  }>();
 
   async getSymbolInfo({ symbol }: { symbol: string }) {
     if (this.symbolInfoCache.has(symbol)) {
@@ -678,7 +653,7 @@ export class BinanceFuturesClient {
     };
   }
 
-  async getKlines(symbol: string, interval: string, limit = 500): Promise<Candle[]> {
+  async getKlines(symbol: string, interval: string, limit = 500): Promise<ICandle[]> {
     const response: any = await this.client.restAPI.klineCandlestickData({
       symbol,
       interval: interval as any,
@@ -698,10 +673,16 @@ export class BinanceFuturesClient {
     }));
   }
 
+  public async accountInfo() {
+    const accResponse = await this.client.restAPI.accountInformationV2();
+    const acc = await accResponse.data();
+    console.log(acc);
+    return acc;
+  }
+
   private async updatePositions() {
     try {
       const accResponse = await this.client.restAPI.accountInformationV2();
-
       const acc = await accResponse.data();
 
       if (!Array.isArray(acc.positions)) {
@@ -710,19 +691,13 @@ export class BinanceFuturesClient {
         return;
       }
 
-      const activePositions: Position[] = acc.positions
+      const activePositions: IPosition[] = acc.positions
         .filter((p: any) => {
           const amt = Number(p.positionAmt);
           return amt !== 0 && !isNaN(amt);
         })
-        .map((p: any): Position => ({
-          symbol: p.symbol,
-          positionAmt: p.positionAmt,
-          entryPrice: p.entryPrice,
-          markPrice: p.markPrice,
-          unrealizedPnL: p.unrealizedProfit,
-          leverage: p.leverage,
-          positionSide: p.positionSide as Position['positionSide'],
+        .map((p): IPosition => ({
+          ...parseNumericStrings(p as any)
         }));
 
       this._positions$.next(activePositions);
@@ -771,8 +746,8 @@ export class BinanceFuturesClient {
 
       console.log(
         `[FORCE CLOSE] ${closeSide} ${quantity} ${symbol} (${positionSide}) ` +
-        `| Entry: ${parseFloat(pos.entryPrice).toFixed(2)} ` +
-        `| PNL: ${parseFloat(pos.unrealizedPnL).toFixed(2)} USDT`
+        `| Entry: ${pos.entryPrice.toFixed(2)} ` +
+        `| PNL: ${pos.unrealizedProfit.toFixed(2)} USDT`
       );
 
       const orderResponse = await this.wsApi.newOrder({
