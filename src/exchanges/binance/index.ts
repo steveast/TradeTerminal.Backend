@@ -3,8 +3,9 @@ import { BinanceFuturesClient } from './BinanceClient';
 
 const wss = new WebSocketServer({ port: Number(process.env.PORT) || 3001 });
 const binanceClient = new BinanceFuturesClient();
+const symbol = 'BTCUSDT';
 
-binanceClient.connect('BTCUSDT', '1m');
+binanceClient.connect(symbol, '1m');
 
 let currentSubscriptions: any[] = []
 
@@ -50,6 +51,11 @@ wss.on('connection', (ws) => {
       if (msg.type === 'accountInfo') {
         const result = await binanceClient.accountInfo();
         ws.send(JSON.stringify({ type: 'accountInfo', data: result }));
+      }
+
+      if (msg.type === 'openTPandSL') {
+        const result = await binanceClient.getOpenTPandSL(msg.payload);
+        ws.send(JSON.stringify({ type: 'openTPandSL', data: result }));
       }
 
       if (msg.type === 'forceClose') {

@@ -10,7 +10,7 @@ import {
 
 import { BehaviorSubject, Subject, timer, from } from 'rxjs';
 import { mergeMap, retry, catchError, takeUntil } from 'rxjs/operators';
-import { ICandle, IPosition } from './types';
+import { IAlgoOrder, ICandle, IPosition } from './types';
 
 function parseNumericStrings<T extends Record<string, any>>(obj: T): T {
   return Object.fromEntries(
@@ -653,6 +653,29 @@ export class BinanceFuturesClient {
     };
   }
 
+  async getOpenTPandSL({ symbol, positionSide }: any) {
+    try {
+      const response = await this.client.restAPI.currentAllAlgoOpenOrders({
+        symbol: symbol
+      });
+
+      const data: any = await response.data();
+      const allAlgoOrders = data || [];
+      const ordersForPosition = allAlgoOrders.filter((order: any) =>
+        order.positionSide === positionSide
+      );
+
+      return {
+        stopLoss: ordersForPosition.find((o: any) => o.orderType === 'STOP_MARKET') || null,
+        takeProfit: ordersForPosition.find((o: any) => o.orderType === 'TAKE_PROFIT_MARKET') || null
+      } as { stopLoss: IAlgoOrder; takeProfit: IAlgoOrder; };
+
+    } catch (error: any) {
+      console.error(`[GET ALGO ORDERS ERROR] ${symbol}:`, error?.message || error);
+      return { stopLoss: null, takeProfit: null };
+    }
+  }
+
   async getKlines(symbol: string, interval: string, limit = 500): Promise<ICandle[]> {
     const response: any = await this.client.restAPI.klineCandlestickData({
       symbol,
@@ -660,7 +683,6 @@ export class BinanceFuturesClient {
       limit
     });
     const data: any[] = await response.data();
-    console.log(data);
     return data.map((k: any[]) => ({
       openTime: k[0],
       open: k[1],
@@ -676,7 +698,6 @@ export class BinanceFuturesClient {
   public async accountInfo() {
     const accResponse = await this.client.restAPI.accountInformationV2();
     const acc = await accResponse.data();
-    console.log(acc);
     return acc;
   }
 
