@@ -53,9 +53,14 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'accountInfo', data: result }));
       }
 
+      if (msg.type === 'getPositions') {
+        const result = await binanceClient.getPositions();
+        ws.send(JSON.stringify({ type: 'positions', data: result }));
+      }
+
       if (msg.type === 'openTPandSL') {
-        const result = await binanceClient.getOpenTPandSL(msg.payload);
-        ws.send(JSON.stringify({ type: 'openTPandSL', data: result }));
+        const result = await binanceClient.getOpenTpAndSl(msg.payload);
+        ws.send(JSON.stringify({ type: 'openTpAndSl', data: result }));
       }
 
       if (msg.type === 'forceClose') {

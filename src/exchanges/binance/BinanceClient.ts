@@ -653,7 +653,7 @@ export class BinanceFuturesClient {
     };
   }
 
-  async getOpenTPandSL({ symbol, positionSide }: any) {
+  async getOpenTpAndSl({ symbol, positionSide }: any) {
     try {
       const response = await this.client.restAPI.currentAllAlgoOpenOrders({
         symbol: symbol
@@ -702,6 +702,10 @@ export class BinanceFuturesClient {
     return acc;
   }
 
+  public getPositions() {
+    return this._positions$.getValue();
+  }
+
   private async updatePositions() {
     try {
       const accResponse = await this.client.restAPI.accountInformationV2();
@@ -713,14 +717,27 @@ export class BinanceFuturesClient {
         return;
       }
 
-      const activePositions: IPosition[] = acc.positions
-        .filter((p: any) => {
-          const amt = Number(p.positionAmt);
-          return amt !== 0 && !isNaN(amt);
-        })
-        .map((p): IPosition => ({
-          ...parseNumericStrings(p as any)
-        }));
+      const activePositions = await Promise.all(
+        acc.positions
+          .filter((p: any) => {
+            const amt = Number(p.positionAmt);
+            return amt !== 0 && !isNaN(amt);
+          })
+          .map(async (p) => {
+            const base = parseNumericStrings(p as any);
+
+            const { stopLoss, takeProfit } = await this.getOpenTpAndSl({
+              symbol: base.symbol,
+              positionSide: base.positionSide,
+            });
+
+            return {
+              ...base,
+              stopLoss,
+              takeProfit,
+            };
+          })
+      );
 
       this._positions$.next(activePositions);
 

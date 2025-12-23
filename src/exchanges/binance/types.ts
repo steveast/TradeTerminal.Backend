@@ -28,6 +28,8 @@ export type IPosition = {
   symbol: string;                   // торговая пара
   unrealizedProfit: number;         // нереализованный PnL
   updateTime: number;               // время обновления
+  stopLoss: IAlgoOrder;
+  takeProfit: IAlgoOrder;
 };
 
 export interface IAlgoOrder {
