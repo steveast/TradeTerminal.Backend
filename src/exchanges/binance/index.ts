@@ -43,6 +43,22 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'strategy', data: result }));
       }
 
+      if (msg.type === 'tp:modify') {
+        const data = await binanceClient.modifyTP(msg.payload);
+        ws.send(JSON.stringify({
+          type: 'tp:modified',
+          data,
+        }));
+      }
+
+      if (msg.type === 'sl:modify') {
+        const data = await binanceClient.modifySL(msg.payload);
+        ws.send(JSON.stringify({
+          type: 'sl:modified',
+          data,
+        }));
+      }
+
       if (msg.type === 'symbolInfo') {
         const result = await binanceClient.getSymbolInfo(msg.payload);
         ws.send(JSON.stringify({ type: 'symbolInfo', data: result }));
@@ -58,9 +74,9 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'positions', data: result }));
       }
 
-      if (msg.type === 'openTPandSL') {
-        const result = await binanceClient.getOpenTpAndSl(msg.payload);
-        ws.send(JSON.stringify({ type: 'openTpAndSl', data: result }));
+      if (msg.type === 'openedTpSl') {
+        const result = await binanceClient.getOpenedTpSl(msg.payload);
+        ws.send(JSON.stringify({ type: 'openedTpSl', data: result }));
       }
 
       if (msg.type === 'forceClose') {

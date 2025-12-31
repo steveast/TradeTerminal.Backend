@@ -9,9 +9,10 @@ import {
 } from '@binance/derivatives-trading-usds-futures';
 
 import { BehaviorSubject, Subject, timer, from } from 'rxjs';
-import { mergeMap, retry, catchError, takeUntil } from 'rxjs/operators';
+import { mergeMap, retry, catchError, takeUntil, distinctUntilChanged, shareReplay, debounceTime } from 'rxjs/operators';
 import { IAlgoOrder, ICandle, IPosition } from './types';
 import parseNumericStrings from '@app/utils/parseNumericStrings';
+import { isEqual } from 'lodash';
 
 
 export class BinanceFuturesClient {
@@ -21,7 +22,11 @@ export class BinanceFuturesClient {
   private readonly _destroy$ = new Subject<void>();
 
   public readonly candles$ = this._candle$.asObservable();
-  public readonly positions$ = this._positions$.asObservable();
+  public readonly positions$ = this._positions$.asObservable().pipe(
+    debounceTime(100),
+    distinctUntilChanged(isEqual),
+    shareReplay(1)
+  );
   public readonly status$ = this._status$.asObservable();
 
   public get statusValue(): 'disconnected' | 'connecting' | 'connected' {
@@ -561,13 +566,21 @@ export class BinanceFuturesClient {
   }
 
   async modifyTP(params: {
-    symbol: string; algoId: number; newTriggerPrice: number; newQuantityUsd?: number; positionSide: 'LONG' | 'SHORT'
+    symbol: string;
+    algoId: number;
+    newTriggerPrice: number;
+    newQuantityUsd?: number;
+    positionSide: 'LONG' | 'SHORT'
   }) {
     return this.modifyTakeProfitOrStopLoss({ ...params, isTakeProfit: true });
   }
 
   async modifySL(params: {
-    symbol: string; algoId: number; newTriggerPrice: number; newQuantityUsd?: number; positionSide: 'LONG' | 'SHORT';
+    symbol: string;
+    algoId: number;
+    newTriggerPrice: number;
+    newQuantityUsd?: number;
+    positionSide: 'LONG' | 'SHORT';
   }) {
     return this.modifyTakeProfitOrStopLoss({ ...params, isTakeProfit: false });
   }
@@ -654,7 +667,7 @@ export class BinanceFuturesClient {
     };
   }
 
-  async getOpenTpAndSl({ symbol, positionSide }: any) {
+  async getOpenedTpSl({ symbol, positionSide }: any) {
     try {
       const response = await this.client.restAPI.currentAllAlgoOpenOrders({
         symbol: symbol
@@ -727,7 +740,7 @@ export class BinanceFuturesClient {
           .map(async (p) => {
             const base = parseNumericStrings(p as any);
 
-            const { stopLoss, takeProfit } = await this.getOpenTpAndSl({
+            const { stopLoss, takeProfit } = await this.getOpenedTpSl({
               symbol: base.symbol,
               positionSide: base.positionSide,
             });
