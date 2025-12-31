@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn ./src/index.ts",
+    "dev": "ts-node-dev --respawn -r tsconfig-paths/register ./src/index.ts",
     "build": "tsc",
     "lint": "eslint ./src/ --cache --fix",
     "start": "node dist/exchanges/binance/index.ts",
@@ -34,6 +34,7 @@
     "globals": "^16.5.0",
     "jiti": "^2.6.1",
     "ts-node-dev": "^2.0.0",
+    "tsconfig-paths": "^4.2.0",
     "typescript-eslint": "^8.50.0"
   }
 }

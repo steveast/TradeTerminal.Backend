@@ -11,19 +11,7 @@ import {
 import { BehaviorSubject, Subject, timer, from } from 'rxjs';
 import { mergeMap, retry, catchError, takeUntil } from 'rxjs/operators';
 import { IAlgoOrder, ICandle, IPosition } from './types';
-
-function parseNumericStrings<T extends Record<string, any>>(obj: T): T {
-  return Object.fromEntries(
-    Object.entries(obj).map(([key, value]) => {
-      if (typeof value === 'string') {
-        const num = Number(value);
-        return [key, Number.isNaN(num) ? value : num];
-      }
-      return [key, value];
-    }),
-  ) as T;
-}
-
+import parseNumericStrings from '@app/utils/parseNumericStrings';
 
 
 export class BinanceFuturesClient {
@@ -42,7 +30,8 @@ export class BinanceFuturesClient {
 
   private client: DerivativesTradingUsdsFutures;
   private clientProd: DerivativesTradingUsdsFutures;
-  private wsStreams: any;
+  private marketWs: any;
+  private userWs: any;
   private wsApi: any;
   private listenKey?: string;
 
@@ -53,11 +42,11 @@ export class BinanceFuturesClient {
     tickSize: number;
   }>();
 
-  constructor(
-    private apiKey: string = process.env.BINANCE_API_KEY!,
-    private apiSecret: string = process.env.BINANCE_API_SECRET!,
-    private testnet = process.env.TESTNET!
-  ) {
+  constructor() {
+    const testnet = process.env.TESTNET! === 'true';
+    const apiKey = testnet ? process.env.BINANCE_API_KEY! : process.env.BINANCE_API_KEY_PROD!;
+    const apiSecret = testnet ? process.env.BINANCE_API_SECRET! : process.env.BINANCE_API_SECRET_PROD!;
+
     const rest = testnet
       ? DERIVATIVES_TRADING_USDS_FUTURES_REST_API_TESTNET_URL
       : DERIVATIVES_TRADING_USDS_FUTURES_REST_API_PROD_URL;
@@ -133,15 +122,19 @@ export class BinanceFuturesClient {
       throw new Error("LISTEN_KEY_FETCH_FAILED");
     }
 
-    this.wsStreams = await this.client.websocketStreams.connect({
-      stream: [`${symbol.toLowerCase()}@kline_${interval}`, `${listenKey}@userData`],
+    this.wsApi = await this.client.websocketAPI.connect();
+
+    this.marketWs = await this.client.websocketStreams.connect({
+      stream: `${symbol.toLowerCase()}@kline_${interval}`,
     });
 
     try {
-      this.wsStreams.on('message', (data: string) => {
+      this.marketWs.on('message', (data: string) => {
         try {
           const msg = JSON.parse(data);
-          if (msg.stream === `${symbol.toLowerCase()}@kline_${interval}` && msg.data.k?.x) {
+
+          // console.log(msg)
+          if (msg.data.e === 'kline') {
             this._candle$.next({
               openTime: msg.data.k.t,
               open: msg.data.k.o,
@@ -152,8 +145,6 @@ export class BinanceFuturesClient {
               closeTime: msg.data.k.T,
               quoteVolume: msg.data.k.q,
             });
-          } else if (msg.stream === `${listenKey}@userData` && (msg.data.e === 'ACCOUNT_UPDATE' || msg.data.e === 'ORDER_TRADE_UPDATE')) {
-            this.updatePositions();
           }
         } catch (e) {
           console.warn('Message parse error', e);
@@ -163,8 +154,19 @@ export class BinanceFuturesClient {
       console.error("КРИТИЧЕСКАЯ ОШИБКА: Сбой при подписке на WS потоки:", e);
       throw new Error("WS_SUBSCRIPTION_FAILED");
     }
+    this.userWs = await this.client.websocketStreams.connect({
+      stream: listenKey,
+    });
 
-    this.wsApi = await this.client.websocketAPI.connect();
+    this.userWs.on('message', (data: string) => {
+      const msg = JSON.parse(data);
+      const event = msg.e || (msg.data && msg.data.e);
+
+      if (event === 'ACCOUNT_UPDATE' || event === 'ORDER_TRADE_UPDATE' || event === 'ALGO_UPDATE') {
+        this.updatePositions();
+      }
+    });
+
 
     timer(0, 25 * 60 * 1000)
       .pipe(
@@ -177,7 +179,7 @@ export class BinanceFuturesClient {
   }
 
   public async changeSymbol(newSymbol: string, newInterval: string = '1m') {
-    if (!this.wsStreams) {
+    if (!this.marketWs) {
       // Если ещё не подключены — просто подключаемся к новому
       await this.connect(newSymbol, newInterval);
       return;
@@ -190,15 +192,15 @@ export class BinanceFuturesClient {
 
     try {
       // Отписываемся от старых стримов
-      this.wsStreams.unsubscribe();
+      this.marketWs.unsubscribe();
 
       // Подписываемся на новые
-      this.wsStreams = await this.client.websocketStreams.connect({
+      this.marketWs = await this.client.websocketStreams.connect({
         stream: [currentStreamName, userDataStream],
       });
 
       // Перепривязываем обработчик сообщений (важно!)
-      this.wsStreams.on('message', (data: string) => {
+      this.marketWs.on('message', (data: string) => {
         try {
           const msg = JSON.parse(data);
           if (msg.stream === currentStreamName && msg.data.k?.x) {
@@ -356,7 +358,6 @@ export class BinanceFuturesClient {
           2
         )} USD) @ ~${price.toFixed(2)} | positionSide: ${positionSide}`
       );
-      console.log(this.wsApi)
 
       const orderResponse = await this.wsApi.newOrder({
         symbol,
@@ -390,7 +391,7 @@ export class BinanceFuturesClient {
     side,
     usdAmount,
     price,
-    positionSide = this.testnet ? 'LONG' : 'BOTH',
+    positionSide = 'LONG',
   }: {
     symbol: string;
     side: 'BUY' | 'SELL';
@@ -871,7 +872,8 @@ export class BinanceFuturesClient {
   destroy() {
     this._destroy$.next();
     this._destroy$.complete();
-    this.wsStreams?.unsubscribe();
+    this.marketWs?.unsubscribe();
+    this.userWs?.unsubscribe();
     this.wsApi?.unsubscribe();
     this._status$.next('disconnected');
   }
