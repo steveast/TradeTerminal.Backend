@@ -90,6 +90,16 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'cancelAllOrders', data: result }));
       }
 
+      if (msg.type === 'cancelOrder') {
+        const result = await binanceClient.cancelOrder(msg);
+        ws.send(JSON.stringify({ type: 'cancelOrder', data: result }));
+      }
+
+      if (msg.type === 'cancelAlgoOrder') {
+        const result = await binanceClient.cancelAlgoOrder(msg.algoId);
+        ws.send(JSON.stringify({ type: 'cancelAlgoOrder', data: result }));
+      }
+
       if (msg.type === 'forceClose') {
         const result = await binanceClient.forceClosePosition(msg.symbol, msg.positionSide);
         ws.send(JSON.stringify({ type: 'closeResult', data: result }));
