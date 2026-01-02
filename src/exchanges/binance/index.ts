@@ -74,11 +74,6 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'positions', data: result }));
       }
 
-      if (msg.type === 'openedTpSl') {
-        const result = await binanceClient.getOpenedTpSl(msg.payload);
-        ws.send(JSON.stringify({ type: 'openedTpSl', data: result }));
-      }
-
       if (msg.type === 'forceClose') {
         const result = await binanceClient.forceClosePosition(msg.symbol, msg.positionSide);
         ws.send(JSON.stringify({ type: 'closeResult', data: result }));
