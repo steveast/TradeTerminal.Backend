@@ -920,13 +920,17 @@ export class BinanceFuturesClient {
     console.log(`[CANCEL ALL] Начинаем полную очистку ордеров для ${symbol}...`);
 
     try {
-      // 1. Отменяем все стандартные ордера (LIMIT, STOP и т.д.) одним запросом
+      const result: any = {};
       const cancelStandardPromise = this.client.restAPI.cancelAllOpenOrders({ symbol })
-        .then(() => console.log(`[CANCEL ALL] Все стандартные ордера ${symbol} отменены`))
-        .catch(err => console.warn(`[CANCEL ALL] Ошибка при отмене стандартных ордеров:`, err.msg || err));
+        .then((res) => {
+          console.log(`[CANCEL ALL] Все стандартные ордера ${symbol} отменены`);
+          return res.data();
+        })
+        .catch(err => {
+          console.warn(`[CANCEL ALL] Ошибка при отмене стандартных ордеров:`, err.msg || err)
+          return err;
+        });
 
-      // 2. Алго-ордера (TP/SL) нельзя отменить одной командой по символу.
-      // Нужно сначала получить их список, а затем отменить каждый по id.
       const algoOrdersResp = await this.client.restAPI.currentAllAlgoOpenOrders({ symbol });
       const algoOrders = await algoOrdersResp.data();
 
@@ -935,24 +939,30 @@ export class BinanceFuturesClient {
 
         const algoCancelPromises = algoOrders.map((order: any) =>
           this.client.restAPI.cancelAlgoOrder({ algoid: order.algoId })
-            .then(() => console.log(`[CANCEL ALL] Алго-ордер ${order.algoId} отменен`))
-            .catch(err => console.warn(`[CANCEL ALL] Не удалось отменить алго-ордер ${order.algoId}:`, err.msg || err))
+            .then((res) => {
+              console.log(`[CANCEL ALL] Алго-ордер ${order.algoId} отменен`);
+              return res.data();
+            })
+            .catch(err => {
+              console.warn(`[CANCEL ALL] Не удалось отменить алго-ордер ${order.algoId}:`, err.msg || err);
+              return err;
+            })
         );
 
         // Ждем завершения всех запросов на удаление алго-ордеров
-        await Promise.all(algoCancelPromises);
+        result.algo = await Promise.all(algoCancelPromises);
       } else {
         console.log(`[CANCEL ALL] Активных алго-ордеров для ${symbol} не найдено.`);
       }
 
       // Ждем завершения отмены лимиток (из пункта 1)
-      await cancelStandardPromise;
+      result.limit = await cancelStandardPromise;
 
       console.log(`[CANCEL ALL] Очистка ${symbol} завершена.`);
 
       // Обновляем локальное состояние позиций, так как стопы/тейки могли исчезнуть
       await this.updatePositions();
-
+      return result;
     } catch (error: any) {
       console.error(`[CANCEL ALL ERROR] Критическая ошибка при очистке ${symbol}:`, error?.message || error);
       throw error;
