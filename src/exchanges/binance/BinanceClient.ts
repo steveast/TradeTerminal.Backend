@@ -691,6 +691,40 @@ export class BinanceFuturesClient {
     }
   }
 
+  async getAllOpenOrders(symbol?: string) {
+    try {
+      // 1. Получаем стандартные открытые ордера (LIMIT, STOP и т.д.)
+      // Если symbol не передан, Binance вернет ордера по всем парам
+      const standardOrdersResp = await this.client.restAPI.currentAllOpenOrders(
+        symbol ? { symbol } : {}
+      );
+      const standardOrders = await standardOrdersResp.data();
+
+      // 2. Получаем открытые Алго-ордера (STOP_MARKET, TAKE_PROFIT_MARKET)
+      const algoOrdersResp = await this.client.restAPI.currentAllAlgoOpenOrders(
+        symbol ? { symbol } : {}
+      );
+      const algoOrders = await algoOrdersResp.data();
+
+      return {
+        // Стандартные ордера (обычно это ваши входы в позицию или лимитки на закрытие)
+        limitOrders: (standardOrders || []).map((o: any) => parseNumericStrings(o)),
+
+        // Алго-ордера (ваша страховка: стоп-лоссы и тейк-профиты)
+        algoOrders: (algoOrders || []).map((o: any) => parseNumericStrings(o)),
+
+        // Объединенный список для удобного поиска
+        all: [
+          ...(standardOrders || []).map((o: any) => ({ ...parseNumericStrings(o), _type: 'STANDARD' })),
+          ...(algoOrders || []).map((o: any) => ({ ...parseNumericStrings(o), _type: 'ALGO' }))
+        ]
+      };
+    } catch (error: any) {
+      console.error('[GET ALL ORDERS ERROR]:', error?.message || error);
+      throw error;
+    }
+  }
+
   async getKlines(symbol: string, interval: string, limit = 500): Promise<ICandle[]> {
     const response: any = await this.client.restAPI.klineCandlestickData({
       symbol,
@@ -878,6 +912,49 @@ export class BinanceFuturesClient {
         console.error(`[CANCEL ALGO ERROR] ${algoId}:`, error?.code, error?.msg || error);
       }
 
+      throw error;
+    }
+  }
+
+  async cancelAllOrders(symbol: string) {
+    console.log(`[CANCEL ALL] Начинаем полную очистку ордеров для ${symbol}...`);
+
+    try {
+      // 1. Отменяем все стандартные ордера (LIMIT, STOP и т.д.) одним запросом
+      const cancelStandardPromise = this.client.restAPI.cancelAllOpenOrders({ symbol })
+        .then(() => console.log(`[CANCEL ALL] Все стандартные ордера ${symbol} отменены`))
+        .catch(err => console.warn(`[CANCEL ALL] Ошибка при отмене стандартных ордеров:`, err.msg || err));
+
+      // 2. Алго-ордера (TP/SL) нельзя отменить одной командой по символу.
+      // Нужно сначала получить их список, а затем отменить каждый по id.
+      const algoOrdersResp = await this.client.restAPI.currentAllAlgoOpenOrders({ symbol });
+      const algoOrders = await algoOrdersResp.data();
+
+      if (algoOrders && algoOrders.length > 0) {
+        console.log(`[CANCEL ALL] Найдено алго-ордеров для отмены: ${algoOrders.length}`);
+
+        const algoCancelPromises = algoOrders.map((order: any) =>
+          this.client.restAPI.cancelAlgoOrder({ algoid: order.algoId })
+            .then(() => console.log(`[CANCEL ALL] Алго-ордер ${order.algoId} отменен`))
+            .catch(err => console.warn(`[CANCEL ALL] Не удалось отменить алго-ордер ${order.algoId}:`, err.msg || err))
+        );
+
+        // Ждем завершения всех запросов на удаление алго-ордеров
+        await Promise.all(algoCancelPromises);
+      } else {
+        console.log(`[CANCEL ALL] Активных алго-ордеров для ${symbol} не найдено.`);
+      }
+
+      // Ждем завершения отмены лимиток (из пункта 1)
+      await cancelStandardPromise;
+
+      console.log(`[CANCEL ALL] Очистка ${symbol} завершена.`);
+
+      // Обновляем локальное состояние позиций, так как стопы/тейки могли исчезнуть
+      await this.updatePositions();
+
+    } catch (error: any) {
+      console.error(`[CANCEL ALL ERROR] Критическая ошибка при очистке ${symbol}:`, error?.message || error);
       throw error;
     }
   }

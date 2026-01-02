@@ -9,6 +9,12 @@ binanceClient.connect(symbol, '1m');
 
 let currentSubscriptions: any[] = []
 
+const tester = async () => {
+  const res = await binanceClient.getAllOpenOrders(symbol);
+  console.log(res);
+}
+// tester();
+
 wss.on('connection', (ws) => {
   console.log('Клиент подключился!');
 
@@ -72,6 +78,16 @@ wss.on('connection', (ws) => {
       if (msg.type === 'getPositions') {
         const result = await binanceClient.getPositions();
         ws.send(JSON.stringify({ type: 'positions', data: result }));
+      }
+
+      if (msg.type === 'getAllOpenOrders') {
+        const result = await binanceClient.getAllOpenOrders();
+        ws.send(JSON.stringify({ type: 'getAllOpenOrders', data: result }));
+      }
+
+      if (msg.type === 'cancelAllOrders') {
+        const result = await binanceClient.cancelAllOrders(msg.symbol);
+        ws.send(JSON.stringify({ type: 'cancelAllOrders', data: result }));
       }
 
       if (msg.type === 'forceClose') {
