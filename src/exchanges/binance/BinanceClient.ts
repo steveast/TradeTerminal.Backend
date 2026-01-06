@@ -77,7 +77,7 @@ export class BinanceFuturesClient {
     });
   }
 
-  async connect(symbol = 'BTCUSDT', interval = '1m') {
+  async connect(symbol: string, interval: string) {
     if (this._status$.value === 'connecting' || this._status$.value === 'connected') {
       return;
     }
@@ -229,6 +229,7 @@ export class BinanceFuturesClient {
       });
 
       console.log(`[CHANGE SYMBOL] Успешно переподключились к ${newSymbol}@kline_${newInterval}`);
+      return { newSymbol, newInterval };
     } catch (error) {
       console.error('[CHANGE SYMBOL] Ошибка при смене тикера:', error);
       // При ошибке — пробуем полностью переподключиться

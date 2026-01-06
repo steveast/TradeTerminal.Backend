@@ -9,12 +9,6 @@ binanceClient.connect(symbol, '1m');
 
 let currentSubscriptions: any[] = []
 
-const tester = async () => {
-  const res = await binanceClient.getAllOpenOrders(symbol);
-  console.log(res);
-}
-// tester();
-
 wss.on('connection', (ws) => {
   console.log('Клиент подключился!');
 
@@ -38,6 +32,12 @@ wss.on('connection', (ws) => {
   ws.on('message', async (message) => {
     try {
       const msg = JSON.parse(message.toString());
+
+      if (msg.type === 'changeSymbol') {
+        const { symbol, timeframe } = msg;
+        const result = await binanceClient.changeSymbol(symbol, timeframe);
+        ws.send(JSON.stringify({ type: 'changeSymbol', data: result }));
+      }
 
       if (msg.type === 'marketOrder') {
         const result = await binanceClient.marketOrder(msg.payload);
