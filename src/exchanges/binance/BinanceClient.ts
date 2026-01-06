@@ -167,7 +167,8 @@ export class BinanceFuturesClient {
       const msg = JSON.parse(data);
       const event = msg.e || (msg.data && msg.data.e);
 
-      if (event === 'ACCOUNT_UPDATE' || event === 'ORDER_TRADE_UPDATE' || event === 'ALGO_UPDATE') {
+      console.log(event);
+      if (event === 'ACCOUNT_UPDATE' || event === 'ORDER_TRADE_UPDATE' || event === 'ALGO_UPDATE' || event === 'TRADE_LITE') {
         this.updatePositions();
       }
     });
@@ -313,6 +314,7 @@ export class BinanceFuturesClient {
         stepSize: Number(lotFilter.stepSize),
         precision,
         tickSize: Number(priceFilter.tickSize),
+        symbols: data.symbols,
       };
 
       this.symbolInfoCache.set(symbol, info);
