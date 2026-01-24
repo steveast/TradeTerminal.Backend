@@ -7,7 +7,7 @@ const symbol = 'BTCUSDT';
 
 binanceClient.connect(symbol, '1m');
 
-let currentSubscriptions: any[] = []
+let currentSubscriptions: any[] = [];
 
 wss.on('connection', (ws) => {
   console.log('Клиент подключился!');

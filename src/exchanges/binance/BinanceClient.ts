@@ -13,6 +13,7 @@ import { mergeMap, retry, catchError, takeUntil, distinctUntilChanged, shareRepl
 import { IAlgoOrder, ICandle, IPosition } from './types';
 import parseNumericStrings from '@app/utils/parseNumericStrings';
 import { isEqual } from 'lodash';
+import { roundToTick } from '@app/utils/roundToTick';
 
 
 export class BinanceFuturesClient {
@@ -613,10 +614,8 @@ export class BinanceFuturesClient {
 
     const quantityStr = qty.toFixed(info.precision);
     const quantityNum = Number(quantityStr);
-
     const baseClientOrderId = `s_${Date.now()}`;
-
-    const roundedEntryPrice = Number(entryPrice.toFixed(info.precision || 1));
+    const roundedEntryPrice = roundToTick(entryPrice, info.tickSize);
 
     const entryResp = await this.client.restAPI.newOrder({
       symbol,
