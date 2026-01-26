@@ -5,6 +5,8 @@ const wss = new WebSocketServer({ port: Number(process.env.PORT) || 3001 });
 const binanceClient = new BinanceFuturesClient();
 const symbol = 'BTCUSDT';
 
+console.log('Terminal is started! ', process.env.TESTNET === 'true' ? 'TESTNET!' : 'Production!');
+
 binanceClient.connect(symbol, '1m');
 
 let currentSubscriptions: any[] = [];
