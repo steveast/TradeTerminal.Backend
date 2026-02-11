@@ -315,7 +315,7 @@ export class BinanceFuturesClient {
         minQty: Number(lotFilter.minQty),
         stepSize: Number(lotFilter.stepSize),
         precision,
-        tickSize: Number(priceFilter.tickSize),
+        tickSize: parseFloat(priceFilter.tickSize),
         symbols: data.symbols,
       };
 
